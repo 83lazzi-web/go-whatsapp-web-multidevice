@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 )
@@ -33,7 +34,7 @@ func getReceiptTypeDescription(evt types.ReceiptType) string {
 }
 
 // createReceiptPayload creates a webhook payload for message acknowledgement (receipt) events
-func createReceiptPayload(evt *events.Receipt) map[string]any {
+func createReceiptPayload(ctx context.Context, evt *events.Receipt, client *whatsmeow.Client) map[string]any {
 	body := make(map[string]any)
 
 	// Create payload structure matching the expected format
@@ -44,10 +45,20 @@ func createReceiptPayload(evt *events.Receipt) map[string]any {
 		payload["ids"] = evt.MessageIDs
 	}
 
+	// Normalize JIDs from LID to phone number format
+	normalizedChat := NormalizeJIDFromLID(ctx, evt.Chat, client)
+	normalizedSender := NormalizeJIDFromLID(ctx, evt.Sender, client)
+
 	// Add from field (the chat where the message was sent)
-	payload["chat_id"] = evt.Chat
-	payload["sender_id"] = evt.Sender
-	payload["from"] = evt.SourceString()
+	payload["chat_id"] = normalizedChat.String()
+	payload["sender_id"] = normalizedSender.String()
+
+	// Build "from" field - prefer normalized phone number
+	if normalizedSender.Server == "s.whatsapp.net" {
+		payload["from"] = normalizedSender.String()
+	} else {
+		payload["from"] = evt.SourceString()
+	}
 
 	if evt.Type == types.ReceiptTypeDelivered {
 		payload["receipt_type"] = "delivered"
@@ -67,7 +78,7 @@ func createReceiptPayload(evt *events.Receipt) map[string]any {
 }
 
 // forwardReceiptToWebhook forwards message acknowledgement events to the configured webhook URLs
-func forwardReceiptToWebhook(ctx context.Context, evt *events.Receipt) error {
-	payload := createReceiptPayload(evt)
+func forwardReceiptToWebhook(ctx context.Context, evt *events.Receipt, client *whatsmeow.Client) error {
+	payload := createReceiptPayload(ctx, evt, client)
 	return forwardPayloadToConfiguredWebhooks(ctx, payload, "message ack event")
 }

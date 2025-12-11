@@ -891,11 +891,13 @@ func handleReceipt(ctx context.Context, evt *events.Receipt) {
 	// Forward receipt (ack) event to webhook if configured
 	// Note: Receipt events are not rate limited as they are critical for message delivery status
 	if len(config.WhatsappWebhook) > 0 && sendReceipt {
-		go func(e *events.Receipt) {
-			if err := forwardReceiptToWebhook(ctx, e); err != nil {
+		// Get client for LID resolution
+		currentClient := GetClient()
+		go func(e *events.Receipt, cli *whatsmeow.Client) {
+			if err := forwardReceiptToWebhook(ctx, e, cli); err != nil {
 				logrus.Errorf("Failed to forward ack event to webhook: %v", err)
 			}
-		}(evt)
+		}(evt, currentClient)
 	}
 }
 

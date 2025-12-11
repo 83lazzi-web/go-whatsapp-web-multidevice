@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  whatsapp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: whatsapp_8083
+    restart: always
+    ports:
+      - "8083:8083"
+    environment:
+      # App Settings
+      APP_PORT: 8083
+      APP_DEBUG: "false"
+      APP_OS: "Photu"
+
+      # Authentication
+      APP_BASIC_AUTH: "admin:Lazzi1302983"
+      WHATSAPP_ACCOUNT_VALIDATION: "true"
+
+      # Webhook Configuration
+      WHATSAPP_WEBHOOK: "https://lazzi-app-backend.onrender.com/api/v1/webhook/whatsapp"
+      WHATSAPP_WEBHOOK_SECRET: "whuV7ZqR+1WZ0DfXhCkzO8ApG6r9X7tNnSxPqvMbq2U="
+
+      # Logging
+      WHATSAPP_LOG_LEVEL: "INFO"
+
+    volumes:
+      # Volume para persistir sessões WhatsApp
+      - whatsapp_data:/app/storages
+
+      # Volume para QR codes (opcional - útil para debug)
+      - ./qrcodes:/app/statics/qrcode
+
+      # Volume para mídia (opcional)
+      - ./media:/app/statics/media
+
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8083/app/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  whatsapp_data:
+    driver: local

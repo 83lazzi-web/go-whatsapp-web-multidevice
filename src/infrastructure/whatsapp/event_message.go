@@ -33,6 +33,11 @@ func createMessagePayload(ctx context.Context, evt *events.Message) (map[string]
 
 	body := make(map[string]any)
 
+	// Add authenticated number (Lazzi customization)
+	if cli.Store.ID != nil {
+		body["numberAuth"] = cli.Store.ID.ToNonAD().User
+	}
+
 	body["sender_id"] = evt.Info.Sender.User
 	body["chat_id"] = evt.Info.Chat.User
 

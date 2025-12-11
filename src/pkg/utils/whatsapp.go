@@ -627,6 +627,28 @@ func IsOnWhatsapp(client *whatsmeow.Client, jid string) bool {
 	return true
 }
 
+// IsOnWhatsappFormatted checks if a number is on WhatsApp and returns the formatted number
+func IsOnWhatsappFormatted(client *whatsmeow.Client, jid string) (string, bool) {
+	// only check if the jid a user with @s.whatsapp.net
+	if strings.Contains(jid, "@s.whatsapp.net") {
+		data, err := client.IsOnWhatsApp(context.Background(), []string{jid})
+		if err != nil {
+			logrus.Error("Failed to check if user is on whatsapp: ", err)
+			return "", false
+		}
+
+		if len(data) > 0 {
+			v := data[0]
+			if !v.IsIn {
+				return "", false
+			}
+			return v.JID.User, true
+		}
+	}
+
+	return jid, true
+}
+
 // ValidateJidWithLogin validates JID with login check
 func ValidateJidWithLogin(client *whatsmeow.Client, jid string) (types.JID, error) {
 	MustLogin(client)
@@ -636,6 +658,27 @@ func ValidateJidWithLogin(client *whatsmeow.Client, jid string) (types.JID, erro
 	}
 
 	return ParseJID(jid)
+}
+
+// ValidateJidWithLoginFormatted validates JID with login check and returns formatted number
+func ValidateJidWithLoginFormatted(client *whatsmeow.Client, jid string) (string, error) {
+	MustLogin(client)
+
+	if !config.WhatsappAccountValidation {
+		return "", pkgError.InvalidJID(fmt.Sprintf("Phone %s validation is disabled", jid))
+	}
+
+	jidParsed, err := ParseJID(jid)
+	if err != nil {
+		return "", err
+	}
+
+	formattedNumber, ok := IsOnWhatsappFormatted(client, jidParsed.String())
+	if !ok {
+		return "", pkgError.InvalidJID(fmt.Sprintf("Phone %s is not on whatsapp", jid))
+	}
+
+	return formattedNumber, nil
 }
 
 // MustLogin ensures the WhatsApp client is logged in
@@ -674,20 +717,48 @@ func GetMessageDigestOrSignature(msg, key []byte) (string, error) {
 }
 
 // BuildEventMessage builds event message structure
+// Handles wrapped messages (Ephemeral, ViewOnce, etc.) that are common in private chats
 func BuildEventMessage(evt *events.Message) (message EvtMessage) {
-	message.Text = evt.Message.GetConversation()
 	message.ID = evt.Info.ID
 
-	if extendedMessage := evt.Message.GetExtendedTextMessage(); extendedMessage != nil {
+	// Unwrap FutureProof wrappers to access the inner message content
+	// This is critical for ephemeral messages and view-once messages
+	innerMsg := evt.Message
+	for i := 0; i < 3; i++ { // safeguard against excessively nested wrappers
+		if vm := innerMsg.GetViewOnceMessage(); vm != nil && vm.GetMessage() != nil {
+			innerMsg = vm.GetMessage()
+			continue
+		}
+		if em := innerMsg.GetEphemeralMessage(); em != nil && em.GetMessage() != nil {
+			innerMsg = em.GetMessage()
+			continue
+		}
+		if vm2 := innerMsg.GetViewOnceMessageV2(); vm2 != nil && vm2.GetMessage() != nil {
+			innerMsg = vm2.GetMessage()
+			continue
+		}
+		if vm2e := innerMsg.GetViewOnceMessageV2Extension(); vm2e != nil && vm2e.GetMessage() != nil {
+			innerMsg = vm2e.GetMessage()
+			continue
+		}
+		break
+	}
+
+	// Now extract text from the unwrapped message
+	message.Text = innerMsg.GetConversation()
+
+	if extendedMessage := innerMsg.GetExtendedTextMessage(); extendedMessage != nil {
 		message.Text = extendedMessage.GetText()
 		message.RepliedId = extendedMessage.ContextInfo.GetStanzaID()
 		message.QuotedMessage = extendedMessage.ContextInfo.GetQuotedMessage().GetConversation()
-	} else if protocolMessage := evt.Message.GetProtocolMessage(); protocolMessage != nil {
+	} else if protocolMessage := innerMsg.GetProtocolMessage(); protocolMessage != nil {
 		if editedMessage := protocolMessage.GetEditedMessage(); editedMessage != nil {
 			if extendedText := editedMessage.GetExtendedTextMessage(); extendedText != nil {
 				message.Text = extendedText.GetText()
 				message.RepliedId = extendedText.ContextInfo.GetStanzaID()
 				message.QuotedMessage = extendedText.ContextInfo.GetQuotedMessage().GetConversation()
+			} else if conv := editedMessage.GetConversation(); conv != "" {
+				message.Text = conv
 			}
 		}
 	}

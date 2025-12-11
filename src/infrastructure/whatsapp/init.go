@@ -237,6 +237,42 @@ func GetConnectionStatus() (isConnected bool, isLoggedIn bool, deviceID string) 
 	return isConnected, isLoggedIn, deviceID
 }
 
+// removeSQLiteFiles removes a SQLite database file and its associated -shm and -wal files with retry logic
+func removeSQLiteFiles(dbPath string, maxRetries int) error {
+	// SQLite creates additional files: -shm (shared memory) and -wal (write-ahead log)
+	filesToRemove := []string{
+		dbPath,
+		dbPath + "-shm",
+		dbPath + "-wal",
+	}
+
+	for _, filePath := range filesToRemove {
+		var lastErr error
+		for attempt := 1; attempt <= maxRetries; attempt++ {
+			err := os.Remove(filePath)
+			if err == nil {
+				logrus.Infof("[CLEANUP] Successfully removed file: %s", filePath)
+				break
+			}
+			if os.IsNotExist(err) {
+				logrus.Debugf("[CLEANUP] File already removed: %s", filePath)
+				break
+			}
+			lastErr = err
+			logrus.Warnf("[CLEANUP] Attempt %d/%d failed to remove %s: %v", attempt, maxRetries, filePath, err)
+			if attempt < maxRetries {
+				// Wait before retry - increasing delay to allow file handles to be released
+				time.Sleep(time.Duration(attempt*100) * time.Millisecond)
+			}
+		}
+		// Only return error for the main db file, -shm and -wal failures are non-critical
+		if lastErr != nil && filePath == dbPath {
+			return fmt.Errorf("failed to remove database file %s after %d attempts: %v", filePath, maxRetries, lastErr)
+		}
+	}
+	return nil
+}
+
 // CleanupDatabase removes the database file (SQLite) or deletes all devices (PostgreSQL) to prevent foreign key constraint issues
 func CleanupDatabase() error {
 	globalStateMu.RLock()
@@ -300,24 +336,34 @@ func CleanupDatabase() error {
 	// SQLite: Close database connections before removing the file
 	logrus.Info("[CLEANUP] SQLite detected - closing database connections before file removal")
 
+	// Clear global references first to prevent any new operations
+	globalStateMu.Lock()
+	localDB := db
+	localKeysDB := keysDB
+	db = nil
+	keysDB = nil
+	globalStateMu.Unlock()
+
 	// Close the main database connection
-	if db != nil {
+	if localDB != nil {
 		logrus.Info("[CLEANUP] Closing main database connection")
-		if err := db.Close(); err != nil {
+		if err := localDB.Close(); err != nil {
 			logrus.Errorf("[CLEANUP] Error closing main database: %v", err)
-			return fmt.Errorf("failed to close main database: %v", err)
+			// Continue anyway - we need to clean up
+		} else {
+			logrus.Info("[CLEANUP] Main database connection closed successfully")
 		}
-		logrus.Info("[CLEANUP] Main database connection closed successfully")
 	}
 
 	// Close keysDB if it exists and is separate from main db
-	if keysDB != nil && keysDB != db {
+	if localKeysDB != nil && localKeysDB != localDB {
 		logrus.Info("[CLEANUP] Closing keysDB database connection")
-		if err := keysDB.Close(); err != nil {
+		if err := localKeysDB.Close(); err != nil {
 			logrus.Errorf("[CLEANUP] Error closing keysDB: %v", err)
-			return fmt.Errorf("failed to close keysDB: %v", err)
+			// Continue anyway
+		} else {
+			logrus.Info("[CLEANUP] KeysDB connection closed successfully")
 		}
-		logrus.Info("[CLEANUP] KeysDB connection closed successfully")
 
 		// Remove keysDB file if it's also SQLite
 		if config.DBKeysURI != "" && strings.HasPrefix(config.DBKeysURI, "file:") {
@@ -326,37 +372,30 @@ func CleanupDatabase() error {
 				keysDBPath = strings.Split(keysDBPath, "?")[0]
 			}
 
-			logrus.Infof("[CLEANUP] Removing keysDB file: %s", keysDBPath)
-			if err := os.Remove(keysDBPath); err != nil {
-				if !os.IsNotExist(err) {
-					logrus.Errorf("[CLEANUP] Error removing keysDB file: %v", err)
-					return fmt.Errorf("failed to remove keysDB file: %v", err)
-				} else {
-					logrus.Info("[CLEANUP] KeysDB file already removed")
-				}
-			} else {
-				logrus.Info("[CLEANUP] KeysDB file removed successfully")
+			logrus.Infof("[CLEANUP] Removing keysDB files: %s", keysDBPath)
+			if err := removeSQLiteFiles(keysDBPath, 5); err != nil {
+				logrus.Errorf("[CLEANUP] Error removing keysDB files: %v", err)
+				// Non-critical, continue
 			}
 		}
 	}
 
-	// Now remove the main database file
+	// Give SQLite time to fully release file handles
+	time.Sleep(100 * time.Millisecond)
+
+	// Now remove the main database file with retry logic
 	dbPath := strings.TrimPrefix(config.DBURI, "file:")
 	if strings.Contains(dbPath, "?") {
 		dbPath = strings.Split(dbPath, "?")[0]
 	}
 
-	logrus.Infof("[CLEANUP] Removing main database file: %s", dbPath)
-	if err := os.Remove(dbPath); err != nil {
-		if !os.IsNotExist(err) {
-			logrus.Errorf("[CLEANUP] Error removing database file: %v", err)
-			return err
-		} else {
-			logrus.Info("[CLEANUP] Database file already removed")
-		}
-	} else {
-		logrus.Info("[CLEANUP] Database file removed successfully")
+	logrus.Infof("[CLEANUP] Removing main database files: %s", dbPath)
+	if err := removeSQLiteFiles(dbPath, 10); err != nil {
+		logrus.Errorf("[CLEANUP] Failed to remove database files: %v", err)
+		return err
 	}
+
+	logrus.Info("[CLEANUP] Database cleanup completed successfully")
 	return nil
 }
 

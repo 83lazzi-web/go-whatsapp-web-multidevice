@@ -1124,3 +1124,18 @@ func (service serviceSend) getDefaultEphemeralExpiration(jid string) (expiration
 
 	return expiration
 }
+
+// VerifyUserValid validates if a phone number is registered on WhatsApp and returns the formatted number
+func (service serviceSend) VerifyUserValid(ctx context.Context, request domainSend.MessageRequest) (response domainSend.GenericResponse, err error) {
+	// Verificar se o número é válido no WhatsApp e obter o número formatado correto
+	formattedNumber, err := utils.ValidateJidWithLoginFormatted(whatsapp.GetClient(), request.Phone)
+	if err != nil {
+		response.Status = "Numero de telefone invalido"
+		return response, err
+	}
+
+	// Retorna apenas o número formatado correto
+	response.Phone = formattedNumber
+	response.Status = "Numero de telefone valido"
+	return response, nil
+}

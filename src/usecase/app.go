@@ -31,6 +31,38 @@ func NewAppService(chatStorageRepo domainChatStorage.IChatStorageRepository) dom
 	}
 }
 
+// processQRChannel starts a goroutine to handle QR channel events and returns a channel for the QR image path
+func (service *serviceApp) processQRChannel(ch <-chan whatsmeow.QRChannelItem, response *domainApp.LoginResponse) chan string {
+	chImage := make(chan string)
+	go func() {
+		for evt := range ch {
+			response.Code = evt.Code
+			response.Duration = evt.Timeout / time.Second / 2
+			if evt.Event == "code" {
+				qrPath := fmt.Sprintf("%s/scan-qr-%s.png", config.PathQrCode, fiberUtils.UUIDv4())
+				err := qrcode.WriteFile(evt.Code, qrcode.Medium, 512, qrPath)
+				if err != nil {
+					logrus.Error("Error when write qr code to file: ", err)
+				}
+				go func() {
+					time.Sleep(response.Duration * time.Second)
+					err := os.Remove(qrPath)
+					if err != nil {
+						// Only log if it's not a "file not found" error
+						if !os.IsNotExist(err) {
+							logrus.Error("error when remove qrImage file", err.Error())
+						}
+					}
+				}()
+				chImage <- qrPath
+			} else {
+				logrus.Error("error when get qrCode", evt.Event, evt.Error)
+			}
+		}
+	}()
+	return chImage
+}
+
 func (service *serviceApp) Login(_ context.Context) (response domainApp.LoginResponse, err error) {
 	client := whatsapp.GetClient()
 	if client == nil {
@@ -59,8 +91,6 @@ func (service *serviceApp) Login(_ context.Context) (response domainApp.LoginRes
 	// Disconnect for reconnecting
 	client.Disconnect()
 
-	chImage := make(chan string)
-
 	logrus.Info("[DEBUG] Attempting to get QR channel...")
 	ch, err := client.GetQRChannel(context.Background())
 	if err != nil {
@@ -73,39 +103,32 @@ func (service *serviceApp) Login(_ context.Context) (response domainApp.LoginRes
 			if client.IsLoggedIn() {
 				return response, pkgError.ErrAlreadyLoggedIn
 			}
-			return response, pkgError.ErrSessionSaved
+			// Session exists but is invalid (logged out remotely)
+			// Perform cleanup and retry login
+			logrus.Info("[DEBUG] Session is invalid - performing cleanup and retrying login")
+			newDB, newCli, cleanupErr := whatsapp.PerformCleanupAndUpdateGlobals(context.Background(), "LOGIN_RETRY", service.chatStorageRepo)
+			if cleanupErr != nil {
+				logrus.Errorf("[DEBUG] Cleanup failed: %v", cleanupErr)
+				return response, pkgError.ErrSessionSaved
+			}
+			// Update client reference and retry
+			client = newCli
+			whatsapp.UpdateGlobalClient(newCli, newDB)
+
+			// Retry getting QR channel after cleanup
+			ch, err = client.GetQRChannel(context.Background())
+			if err != nil {
+				logrus.Errorf("[DEBUG] GetQRChannel failed after cleanup: %v", err)
+				return response, pkgError.ErrQrChannel
+			}
+			logrus.Info("[DEBUG] QR channel obtained successfully after cleanup")
 		} else {
 			return response, pkgError.ErrQrChannel
 		}
-	} else {
-		logrus.Info("[DEBUG] QR channel obtained successfully")
-		go func() {
-			for evt := range ch {
-				response.Code = evt.Code
-				response.Duration = evt.Timeout / time.Second / 2
-				if evt.Event == "code" {
-					qrPath := fmt.Sprintf("%s/scan-qr-%s.png", config.PathQrCode, fiberUtils.UUIDv4())
-					err = qrcode.WriteFile(evt.Code, qrcode.Medium, 512, qrPath)
-					if err != nil {
-						logrus.Error("Error when write qr code to file: ", err)
-					}
-					go func() {
-						time.Sleep(response.Duration * time.Second)
-						err := os.Remove(qrPath)
-						if err != nil {
-							// Only log if it's not a "file not found" error
-							if !os.IsNotExist(err) {
-								logrus.Error("error when remove qrImage file", err.Error())
-							}
-						}
-					}()
-					chImage <- qrPath
-				} else {
-					logrus.Error("error when get qrCode", evt.Event, evt.Error)
-				}
-			}
-		}()
 	}
+
+	logrus.Info("[DEBUG] QR channel obtained successfully")
+	chImage := service.processQRChannel(ch, &response)
 
 	err = client.Connect()
 	if err != nil {

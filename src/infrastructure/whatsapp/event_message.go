@@ -41,6 +41,15 @@ func createMessagePayload(ctx context.Context, evt *events.Message) (map[string]
 	body["sender_id"] = evt.Info.Sender.User
 	body["chat_id"] = evt.Info.Chat.User
 
+	// Try to resolve sender LID to phone number
+	if evt.Info.Sender.Server == "lid" {
+		resolvedSender := NormalizeJIDFromLID(ctx, evt.Info.Sender, cli)
+		if resolvedSender.Server == "s.whatsapp.net" {
+			body["sender_id"] = resolvedSender.User
+			logrus.Debugf("[LID] Resolved sender LID %s to phone %s", evt.Info.Sender.String(), resolvedSender.User)
+		}
+	}
+
 	if from := evt.Info.SourceString(); from != "" {
 		body["from"] = from
 
@@ -61,6 +70,10 @@ func createMessagePayload(ctx context.Context, evt *events.Message) (map[string]
 					logrus.Errorf("Error when get pn for lid %s: %v", lid.String(), err)
 				}
 				if !pn.IsEmpty() {
+					// Update sender_id with resolved phone if not already set
+					if body["sender_id"] == evt.Info.Sender.User {
+						body["sender_id"] = pn.User
+					}
 					if from_group != "" {
 						body["from"] = fmt.Sprintf("%s in %s", pn.String(), from_group)
 					} else {

@@ -595,15 +595,32 @@ func ExtractMedia(ctx context.Context, client *whatsmeow.Client, storageLocation
 }
 
 // SanitizePhone sanitizes phone number by adding appropriate WhatsApp suffix
+// Supports: phone numbers, group IDs, and LID (Linked ID) format
 const maxPhoneNumberLength = 15 // Maximum digits in a phone number
 
 func SanitizePhone(phone *string) {
-	if phone != nil && len(*phone) > 0 && !strings.Contains(*phone, "@") {
-		if len(*phone) <= maxPhoneNumberLength {
-			*phone = fmt.Sprintf("%s%s", *phone, config.WhatsappTypeUser)
-		} else {
-			*phone = fmt.Sprintf("%s%s", *phone, config.WhatsappTypeGroup)
-		}
+	if phone == nil || len(*phone) == 0 {
+		return
+	}
+
+	// Already has a suffix (@s.whatsapp.net, @g.us, @lid, etc)
+	if strings.Contains(*phone, "@") {
+		return
+	}
+
+	// Check if it's a LID format (starts with "lid:" prefix for explicit LID)
+	if strings.HasPrefix(*phone, "lid:") {
+		// Remove the prefix and add @lid suffix
+		lidNumber := strings.TrimPrefix(*phone, "lid:")
+		*phone = fmt.Sprintf("%s@lid", lidNumber)
+		return
+	}
+
+	// Standard phone number or group ID
+	if len(*phone) <= maxPhoneNumberLength {
+		*phone = fmt.Sprintf("%s%s", *phone, config.WhatsappTypeUser)
+	} else {
+		*phone = fmt.Sprintf("%s%s", *phone, config.WhatsappTypeGroup)
 	}
 }
 
@@ -650,10 +667,13 @@ func IsOnWhatsappFormatted(client *whatsmeow.Client, jid string) (string, bool) 
 }
 
 // ValidateJidWithLogin validates JID with login check
+// LID JIDs (@lid suffix) skip the IsOnWhatsapp validation as they are internal identifiers
 func ValidateJidWithLogin(client *whatsmeow.Client, jid string) (types.JID, error) {
 	MustLogin(client)
 
-	if config.WhatsappAccountValidation && !IsOnWhatsapp(client, jid) {
+	// Skip IsOnWhatsapp validation for LID JIDs - they are internal identifiers
+	isLID := strings.Contains(jid, "@lid")
+	if config.WhatsappAccountValidation && !isLID && !IsOnWhatsapp(client, jid) {
 		return types.JID{}, pkgError.InvalidJID(fmt.Sprintf("Phone %s is not on whatsapp", jid))
 	}
 

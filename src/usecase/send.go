@@ -85,6 +85,9 @@ func (service serviceSend) SendText(ctx context.Context, request domainSend.Mess
 		return response, err
 	}
 
+	// If recipient is a LID, try to resolve it to phone number
+	dataWaRecipient = whatsapp.NormalizeJIDFromLID(ctx, dataWaRecipient, whatsapp.GetClient())
+
 	// Create base message
 	msg := &waE2E.Message{
 		ExtendedTextMessage: &waE2E.ExtendedTextMessage{
@@ -178,6 +181,9 @@ func (service serviceSend) SendImage(ctx context.Context, request domainSend.Ima
 	if err != nil {
 		return response, err
 	}
+
+	// If recipient is a LID, try to resolve it to phone number
+	dataWaRecipient = whatsapp.NormalizeJIDFromLID(ctx, dataWaRecipient, whatsapp.GetClient())
 
 	var (
 		imagePath      string
@@ -341,6 +347,9 @@ func (service serviceSend) SendFile(ctx context.Context, request domainSend.File
 		return response, err
 	}
 
+	// If recipient is a LID, try to resolve it to phone number
+	dataWaRecipient = whatsapp.NormalizeJIDFromLID(ctx, dataWaRecipient, whatsapp.GetClient())
+
 	fileBytes := helpers.MultipartFormFileHeaderToBytes(request.File)
 	fileMimeType := resolveDocumentMIME(request.File.Filename, fileBytes)
 
@@ -416,6 +425,9 @@ func (service serviceSend) SendVideo(ctx context.Context, request domainSend.Vid
 	if err != nil {
 		return response, err
 	}
+
+	// If recipient is a LID, try to resolve it to phone number
+	dataWaRecipient = whatsapp.NormalizeJIDFromLID(ctx, dataWaRecipient, whatsapp.GetClient())
 
 	var (
 		videoPath      string
@@ -592,6 +604,9 @@ func (service serviceSend) SendContact(ctx context.Context, request domainSend.C
 		return response, err
 	}
 
+	// If recipient is a LID, try to resolve it to phone number
+	dataWaRecipient = whatsapp.NormalizeJIDFromLID(ctx, dataWaRecipient, whatsapp.GetClient())
+
 	msgVCard := fmt.Sprintf("BEGIN:VCARD\nVERSION:3.0\nN:;%v;;;\nFN:%v\nTEL;type=CELL;waid=%v:+%v\nEND:VCARD",
 		request.ContactName, request.ContactName, request.ContactPhone, request.ContactPhone)
 	msg := &waE2E.Message{ContactMessage: &waE2E.ContactMessage{
@@ -634,6 +649,9 @@ func (service serviceSend) SendLink(ctx context.Context, request domainSend.Link
 	if err != nil {
 		return response, err
 	}
+
+	// If recipient is a LID, try to resolve it to phone number
+	dataWaRecipient = whatsapp.NormalizeJIDFromLID(ctx, dataWaRecipient, whatsapp.GetClient())
 
 	metadata, err := utils.GetMetaDataFromURL(request.Link)
 	if err != nil {
@@ -710,6 +728,9 @@ func (service serviceSend) SendLocation(ctx context.Context, request domainSend.
 		return response, err
 	}
 
+	// If recipient is a LID, try to resolve it to phone number
+	dataWaRecipient = whatsapp.NormalizeJIDFromLID(ctx, dataWaRecipient, whatsapp.GetClient())
+
 	// Compose WhatsApp Proto
 	msg := &waE2E.Message{
 		LocationMessage: &waE2E.LocationMessage{
@@ -756,6 +777,9 @@ func (service serviceSend) SendAudio(ctx context.Context, request domainSend.Aud
 	if err != nil {
 		return response, err
 	}
+
+	// If recipient is a LID, try to resolve it to phone number
+	dataWaRecipient = whatsapp.NormalizeJIDFromLID(ctx, dataWaRecipient, whatsapp.GetClient())
 
 	var (
 		audioBytes    []byte
@@ -828,6 +852,9 @@ func (service serviceSend) SendPoll(ctx context.Context, request domainSend.Poll
 	if err != nil {
 		return response, err
 	}
+
+	// If recipient is a LID, try to resolve it to phone number
+	dataWaRecipient = whatsapp.NormalizeJIDFromLID(ctx, dataWaRecipient, whatsapp.GetClient())
 
 	content := "📊 " + request.Question
 
@@ -926,6 +953,9 @@ func (service serviceSend) SendSticker(ctx context.Context, request domainSend.S
 	if err != nil {
 		return response, err
 	}
+
+	// If recipient is a LID, try to resolve it to phone number
+	dataWaRecipient = whatsapp.NormalizeJIDFromLID(ctx, dataWaRecipient, whatsapp.GetClient())
 
 	var (
 		stickerPath  string

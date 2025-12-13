@@ -2,8 +2,14 @@ name: Build and Deploy - WhatsApp Service
 
 on:
   push:
-    branches: [main, master]
+    branches: [custom/lazzi]
   workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: 'Forçar deploy mesmo sem mudanças'
+        required: false
+        default: false
+        type: boolean
 
 env:
   IMAGE_NAME: lazziapp/whatsapp-service

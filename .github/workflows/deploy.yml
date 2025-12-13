@@ -1,0 +1,100 @@
+name: Build and Deploy - WhatsApp Service
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: lazziapp/whatsapp-service
+
+jobs:
+  build:
+    name: Build and Push
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to Swarm
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Deploy to Docker Swarm
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            echo "🚀 Iniciando deploy do whatsapp-service..."
+
+            # Pull da nova imagem
+            docker pull ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+            # Verificar se o serviço existe no Swarm
+            if docker service ls | grep -q whatsapp_whatsapp; then
+              docker service update \
+                --image ${{ env.IMAGE_NAME }}:${{ github.sha }} \
+                --update-parallelism 1 \
+                --update-delay 10s \
+                --update-failure-action rollback \
+                whatsapp_whatsapp
+            else
+              echo "⚠️ Serviço whatsapp_whatsapp não existe no Swarm"
+              echo "Faça o deploy inicial manualmente com: docker stack deploy -c docker-compose.whatsapp.yml whatsapp"
+              exit 1
+            fi
+
+            echo "✅ Deploy concluído!"
+
+      - name: Notify Telegram - Success
+        if: success()
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            ✅ Deploy Concluído!
+
+            📦 Serviço: whatsapp-service
+            🔖 Versão: ${{ github.sha }}
+            👤 Por: ${{ github.actor }}
+
+      - name: Notify Telegram - Failure
+        if: failure()
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            ❌ Deploy Falhou!
+
+            📦 Serviço: whatsapp-service
+            🔖 Versão: ${{ github.sha }}
+            👤 Por: ${{ github.actor }}
+
+            🔗 Ver logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}

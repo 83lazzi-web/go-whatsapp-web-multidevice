@@ -2,7 +2,7 @@ name: Build and Deploy - WhatsApp Service
 
 on:
   push:
-    branches: [custom/lazzi]
+    branches: [custom/lazzi, custom/lazzi-updated]
   workflow_dispatch:
     inputs:
       force_deploy:
@@ -75,7 +75,14 @@ jobs:
               exit 1
             fi
 
-            echo "✅ Deploy concluído!"
+            echo "✅ Deploy Swarm (8083) concluído!"
+
+            # Atualizar zap_go_8082 via docker-compose
+            echo "🚀 Atualizando zap_go_8082 (porta 8082)..."
+            cd /root/deploy
+            docker compose pull zap_go_8082
+            docker compose up -d --no-deps zap_go_8082
+            echo "✅ Deploy 8082 concluído!"
 
       - name: Notify Telegram - Success
         if: success()
@@ -86,7 +93,7 @@ jobs:
           message: |
             ✅ Deploy Concluído!
 
-            📦 Serviço: whatsapp-service
+            📦 Serviços: whatsapp-service (8083 Swarm + 8082 Compose)
             🔖 Versão: ${{ github.sha }}
             👤 Por: ${{ github.actor }}
 

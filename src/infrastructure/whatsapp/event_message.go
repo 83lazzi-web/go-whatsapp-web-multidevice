@@ -67,6 +67,11 @@ func createWebhookEvent(ctx context.Context, client *whatsmeow.Client, evt *even
 		return nil, err
 	}
 
+	// Add authenticated number (Lazzi customization)
+	if client != nil && client.Store != nil && client.Store.ID != nil {
+		payload["numberAuth"] = client.Store.ID.ToNonAD().User
+	}
+
 	webhookEvent.Event = eventType
 	webhookEvent.Payload = payload
 

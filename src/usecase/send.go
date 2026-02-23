@@ -1688,6 +1688,24 @@ func getWebPInfo(ctx context.Context, filePath string) (isAnimated bool, width i
 	return isAnimated, width, height
 }
 
+// VerifyUserValid validates if a phone number is registered on WhatsApp and returns the formatted number
+func (service serviceSend) VerifyUserValid(ctx context.Context, request domainSend.MessageRequest) (response domainSend.GenericResponse, err error) {
+	client := whatsapp.ClientFromContext(ctx)
+	if client == nil {
+		return response, pkgError.ErrWaCLI
+	}
+
+	parsedJID, err := utils.ValidateJidWithLogin(client, request.BaseRequest.Phone)
+	if err != nil {
+		response.Status = "Numero de telefone invalido"
+		return response, err
+	}
+
+	response.Phone = parsedJID.User
+	response.Status = "Numero de telefone valido"
+	return response, nil
+}
+
 func (service serviceSend) getDefaultEphemeralExpiration(jid string) (expiration uint32) {
 	expiration = 0
 	if jid == "" {

@@ -32,10 +32,16 @@ type IPresenceSender interface {
 	SendChatPresence(ctx context.Context, request ChatPresenceRequest) (response GenericResponse, err error)
 }
 
+// IUserValidator handles user validation operations
+type IUserValidator interface {
+	VerifyUserValid(ctx context.Context, request MessageRequest) (response GenericResponse, err error)
+}
+
 // ISendUsecase combines all sender interfaces for backward compatibility
 type ISendUsecase interface {
 	ITextSender
 	IMediaSender
 	IInteractionSender
 	IPresenceSender
+	IUserValidator
 }

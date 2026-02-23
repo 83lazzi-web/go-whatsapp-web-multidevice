@@ -1,10 +1,50 @@
-.idea
-.vscode
+# Git
 .git
 .gitignore
+.gitattributes
+
+# IDEs
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Documentation
+*.md
+README.md
+CHANGELOG.md
+LICENSE
+docs/
+
+# Build artifacts
+main
+main_zap
+*.exe
+*.test
+*.prof
+
+# Storages (dados persistentes - usar volumes)
+src/storages/
+storages/
+
+# Logs
+*.log
+
+# Environment
 .env
 .env.local
-.env.development
-.env.test
-.env.production
-docker
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test coverage
+coverage.txt
+*.out
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose*.yml

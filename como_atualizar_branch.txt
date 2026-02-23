@@ -1,0 +1,12 @@
+Como Atualizar com Upstream
+Quando houver atualizações no repositório original:
+# 1. Atualizar main do upstream
+git checkout main
+git fetch upstream
+git merge upstream/main
+git push origin main
+
+# 2. Rebasear suas customizações
+git checkout custom/lazzi
+git rebase main
+git push origin custom/lazzi --force-with-lease

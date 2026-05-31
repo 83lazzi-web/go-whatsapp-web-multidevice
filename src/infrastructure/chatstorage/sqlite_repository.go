@@ -987,7 +987,66 @@ func (r *SQLiteRepository) InitializeSchema() error {
 		}
 	}
 
+	// Backfill device_id on databases created before it was added to the
+	// chats/messages schema. The CREATE TABLE migrations use IF NOT EXISTS,
+	// so legacy tables never gained the column and queries fail with
+	// "no such column: device_id". This is idempotent: it only adds the
+	// column when missing, leaving newer databases untouched.
+	if err := r.ensureDeviceIDColumns(); err != nil {
+		return fmt.Errorf("failed to ensure device_id columns: %w", err)
+	}
+
 	return nil
+}
+
+// ensureDeviceIDColumns adds the device_id column to the chats and messages
+// tables when it is missing (legacy databases). Existing data is preserved
+// and the column defaults to '' to match the CREATE TABLE schema.
+func (r *SQLiteRepository) ensureDeviceIDColumns() error {
+	for _, table := range []string{"chats", "messages"} {
+		has, err := r.columnExists(table, "device_id")
+		if err != nil {
+			return err
+		}
+		if has {
+			continue
+		}
+		stmt := fmt.Sprintf(
+			"ALTER TABLE %s ADD COLUMN device_id VARCHAR(255) NOT NULL DEFAULT ''",
+			table,
+		)
+		if _, err := r.db.Exec(stmt); err != nil {
+			return fmt.Errorf("add device_id to %s: %w", table, err)
+		}
+	}
+	return nil
+}
+
+// columnExists reports whether the given column is present in the table.
+func (r *SQLiteRepository) columnExists(table, column string) (bool, error) {
+	rows, err := r.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			ctype      string
+			notNull    int
+			dfltValue  sql.NullString
+			primaryKey int
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dfltValue, &primaryKey); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // getSchemaVersion returns the current schema version

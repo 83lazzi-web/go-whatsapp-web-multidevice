@@ -1,50 +1,10 @@
-# Git
+.idea
+.vscode
 .git
 .gitignore
-.gitattributes
-
-# IDEs
-.vscode
-.idea
-*.swp
-*.swo
-*~
-
-# Documentation
-*.md
-README.md
-CHANGELOG.md
-LICENSE
-docs/
-
-# Build artifacts
-main
-main_zap
-*.exe
-*.test
-*.prof
-
-# Storages (dados persistentes - usar volumes)
-src/storages/
-storages/
-
-# Logs
-*.log
-
-# Environment
 .env
 .env.local
-.env.*.local
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Test coverage
-coverage.txt
-*.out
-
-# Docker
-Dockerfile
-.dockerignore
-docker-compose*.yml
+.env.development
+.env.test
+.env.production
+# Keep docker/ in context so the image can COPY entrypoint.sh (see docker/golang.Dockerfile).

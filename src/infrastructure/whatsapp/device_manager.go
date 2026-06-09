@@ -69,6 +69,30 @@ func (m *DeviceManager) GetDevice(id string) (*DeviceInstance, bool) {
 	return instance, ok
 }
 
+func (m *DeviceManager) getDeviceByJID(jid string) (*DeviceInstance, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, inst := range m.devices {
+		if inst != nil && inst.JID() == jid {
+			return inst, true
+		}
+	}
+	return nil, false
+}
+
+// IsHealthy returns true if the device manager is initialized and has a valid store connection.
+// Note: This is a service initialization check, not a live connectivity check.
+// Returning true indicates the internal store is ready, but does not guarantee
+// that any WhatsApp device connections are currently active or authenticated.
+func (m *DeviceManager) IsHealthy() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.store != nil
+}
+
 // DefaultDevice returns the only registered device when running in single-device mode.
 func (m *DeviceManager) DefaultDevice() *DeviceInstance {
 	if m == nil {
@@ -100,6 +124,9 @@ func (m *DeviceManager) ResolveDevice(deviceID string) (*DeviceInstance, string,
 	if trimmedID != "" {
 		if inst, ok := m.GetDevice(trimmedID); ok && inst != nil {
 			return inst, trimmedID, nil
+		}
+		if inst, ok := m.getDeviceByJID(trimmedID); ok && inst != nil {
+			return inst, inst.ID(), nil
 		}
 		return nil, trimmedID, fmt.Errorf("device %s not found", trimmedID)
 	}
@@ -291,7 +318,7 @@ func (m *DeviceManager) LoadExistingDevices(ctx context.Context) error {
 
 		// Check if device already exists by ID or JID
 		m.mu.RLock()
-		_, existsByID := m.devices[jid]
+		existingByID := m.devices[jid]
 		var matchedDevice *DeviceInstance
 		var orphanDevice *DeviceInstance
 		for _, inst := range m.devices {
@@ -306,16 +333,18 @@ func (m *DeviceManager) LoadExistingDevices(ctx context.Context) error {
 		m.mu.RUnlock()
 
 		// Skip if already matched
-		if existsByID || matchedDevice != nil {
+		if existingByID != nil {
+			m.applyStoreJID(existingByID, jid)
+			continue
+		}
+		if matchedDevice != nil {
 			continue
 		}
 
 		// Match orphaned device with this JID
 		if orphanDevice != nil {
 			logrus.Infof("[DEVICE_MANAGER] matching orphaned device %s with JID %s", orphanDevice.ID(), jid)
-			orphanDevice.mu.Lock()
-			orphanDevice.jid = jid
-			orphanDevice.mu.Unlock()
+			m.applyStoreJID(orphanDevice, jid)
 			if m.storage != nil {
 				_ = m.storage.SaveDeviceRecord(&domainChatStorage.DeviceRecord{
 					DeviceID: orphanDevice.ID(),
@@ -328,10 +357,21 @@ func (m *DeviceManager) LoadExistingDevices(ctx context.Context) error {
 		// Create new device instance
 		instance := NewDeviceInstance(jid, nil, newDeviceChatStorage(jid, m.storage))
 		instance.SetState(domainDevice.DeviceStateDisconnected)
+		m.applyStoreJID(instance, jid)
 		m.AddDevice(instance)
 	}
 
 	return nil
+}
+
+func (m *DeviceManager) applyStoreJID(instance *DeviceInstance, jid string) {
+	if instance == nil || jid == "" {
+		return
+	}
+	instance.mu.Lock()
+	instance.jid = jid
+	instance.mu.Unlock()
+	instance.SetChatStorage(newDeviceChatStorage(jid, m.storage))
 }
 
 // loadFromRegistry loads devices from the registry, handling deduplication.
@@ -478,7 +518,7 @@ func (m *DeviceManager) EnsureClient(ctx context.Context, deviceID string) (*Dev
 		inst.SetChatStorage(repo)
 	}
 
-	client.AddEventHandler(func(rawEvt interface{}) {
+	client.AddEventHandler(func(rawEvt any) {
 		handler(ctx, inst, rawEvt)
 	})
 
@@ -535,7 +575,9 @@ func (m *DeviceManager) getOrCreateStoreDevice(ctx context.Context, deviceID str
 	// Try to reuse an existing device record if the ID maps to a JID.
 	if deviceID != "" {
 		if jid, err := types.ParseJID(deviceID); err == nil {
-			if dev, err := m.store.GetDevice(ctx, jid); err == nil && dev != nil {
+			if dev, err := findStoreDeviceByJID(ctx, m.store, jid); err != nil {
+				return nil, err
+			} else if dev != nil {
 				return dev, nil
 			}
 		}
@@ -550,18 +592,10 @@ func (m *DeviceManager) getOrCreateStoreDevice(ctx context.Context, deviceID str
 
 		if instJID != "" {
 			if jid, err := types.ParseJID(instJID); err == nil {
-				if dev, err := m.store.GetDevice(ctx, jid); err == nil && dev != nil {
+				if dev, err := findStoreDeviceByJID(ctx, m.store, jid); err != nil {
+					return nil, err
+				} else if dev != nil {
 					return dev, nil
-				}
-				// Fallback: iterate all devices to find one with matching User (ignoring AD-ID)
-				// This handles cases where registry has Non-AD JID but store has full JID
-				if allDevices, err := m.store.GetAllDevices(ctx); err == nil {
-					targetUser := jid.User
-					for _, d := range allDevices {
-						if d != nil && d.ID != nil && d.ID.User == targetUser {
-							return d, nil
-						}
-					}
 				}
 			}
 		}
@@ -576,15 +610,35 @@ func (m *DeviceManager) configureKeysStore(ctx context.Context, device *store.De
 	}
 
 	innerStore := sqlstore.NewSQLStore(m.keys, *device.ID)
-	syncKeysDevice(ctx, m.store, m.keys)
+	syncKeysDevice(ctx, m.store, m.keys, *device.ID)
 
-	device.Identities = innerStore
-	device.Sessions = innerStore
-	device.PreKeys = innerStore
-	device.SenderKeys = innerStore
-	device.MsgSecrets = innerStore
-	device.PrivacyTokens = innerStore
+	applyKeyCacheStore(device, innerStore)
 	return nil
+}
+
+func findStoreDeviceByJID(ctx context.Context, container *sqlstore.Container, jid types.JID) (*store.Device, error) {
+	if container == nil || jid.IsEmpty() {
+		return nil, nil
+	}
+
+	if dev, err := container.GetDevice(ctx, jid); err != nil {
+		return nil, err
+	} else if dev != nil {
+		return dev, nil
+	}
+
+	devices, err := container.GetAllDevices(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	targetJID := jid.ToNonAD().String()
+	for _, dev := range devices {
+		if dev != nil && dev.ID != nil && dev.ID.ToNonAD().String() == targetJID {
+			return dev, nil
+		}
+	}
+	return nil, nil
 }
 
 func configureDeviceProps() {
